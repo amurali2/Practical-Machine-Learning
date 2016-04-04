@@ -1,0 +1,154 @@
+---
+title: "Activity Prediction Project"
+author: "Adithya Murali"
+date: "April 3, 2016"
+output: html_document
+---
+## Background
+Using devices such as JawboneUp, NikeFuelBand, and Fitbitit is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in
+their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+   
+In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).   
+
+## Data Loading
+
+First, we load the dervied data from accelerometers, that we will use to build our prediction model, and check the dimensions of the dataframe.
+
+```{r cache=TRUE}
+## Download files from web if missing
+if (!file.exists("./data/pml-training.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+                destfile="./data/pml-training.csv", method="curl")
+}
+if (!file.exists("./data/pml-testing.csv")) {
+  download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                destfile="./data/pml-testing.csv", method="curl")
+}
+pmltraining = read.csv("./data/pml-training.csv");
+pmltesting = read.csv("./data/pml-testing.csv");
+dim(pmltraining)
+```
+
+As shown above, there are 160 columns and 19622 observations. 
+
+```{r eval=FALSE}
+names(pmltraining)
+```
+
+After checking the names of the columns, output hidden for readability, we see that there is one column for target outcome `classe`.
+
+## Data Cleaning
+
+First, we observe the target outcome or `classe` variable from our model training data.
+```{r}
+classe.outcome= pmltraining[, "classe"]
+levels(classe.outcome)
+```
+
+There are five levels of `classe` variable: `A`, `B`, `C`, `D`, `E`
+
+For the purpose of this analysis we will only inlcude data in those columns where the sensors are belt, arm, dumbbell or forearm.
+
+In this analysis we only include data in those columns that contain the sensors belt, arm, dumbell or forearm.
+
+```{r}
+filter = grepl("belt|arm|forearm|dumbell", names(pmltraining))
+cleanedTrain = pmltraining[, filter]
+cleanedTest = pmltesting[, filter]
+cleanedTrain$classe = classe.outcome
+```
+
+To impove accuracy with our prediction we remove all columns with NA values.   
+```{r}
+valid.cols = colSums(is.na(cleanedTest)) == 0
+cleanedTrain = cleanedTrain[, valid.cols]
+cleanedTest = cleanedTest[, valid.cols]
+```
+
+Check amount of predictors in resulting data frame
+```{r}
+table(complete.cases(cleanedTrain))
+table(sapply(cleanedTrain[1,], class))
+```
+
+There are 19622 complete observations with 39 integer or numeric columns and one factor column, containing our target outcome.
+
+## Data Preprocessing
+We set our seed for reproducibility and load `caret` package needed for pre-processing and later for model building.
+
+```{r message=FALSE}
+library(caret)
+set.seed(1500)
+```
+
+Not to be confused with our `pmltesting` data, as part of our preprocessing we split our `pmltraining` dataset into a `training` and `testing` dataset. This way, as we build our prediction model using `training` dataset we can validate it using our `testing` dataset, where we know the outcome, before performing predictions with `pmltesting`.
+
+```{r}
+inTrain <- createDataPartition(y=cleanedTrain$classe, p=0.60, list=FALSE)
+training <- cleanedTrain[inTrain,]
+testing <- cleanedTrain[-inTrain,]
+```
+
+## Data Exploration
+
+We load libraries for rendering plots.
+
+```{r message=FALSE}
+library(ggplot2) ##for exploration
+library(corrplot) ##for exploration
+```
+
+We graph the relationship between our numeric or integer column values vs. our factor variable, the outcome.
+```{r cache=TRUE}
+featurePlot(training[,1:(ncol(training)-1)], training[,"classe"], "strip")
+```
+
+We also plot a correlation matrix containing all of our features.
+```{r cache=TRUE}
+corrplot.mixed(cor(training[,1:(ncol(training)-1)]), lower="circle", upper="color", 
+               tl.pos="lt", diag="n", order="hclust", hclust.method="complete")
+```
+
+## Model Building
+
+Lets use `random forest` to create our prediction model. First, we load the needed libraries. 
+
+```{r message=FALSE}
+library(randomForest)
+```
+
+Since random forest have a downside of over-fitting, it is important that we use some cross validation. 
+```{r message=FALSE, cache=TRUE}
+rfmodel.control <- trainControl(method="cv", number=4, verboseIter=F) ##4-fold cross-validation
+rfmodel.fit <- train(classe ~ ., data=training, method="rf", trControl=rfmodel.control)
+```
+
+Let us examine the final model as part of random forest model fit.
+
+```{r cache=TRUE}
+rfmodel.fit$finalModel
+```
+
+We get an accuracy of `98.79%`.
+
+## Model Validation
+
+Lets use our random forest model from the previous step and calculate our **out of sample error** using the `testing` dataset we set aside from our `pmltraining` data.
+
+```{r}
+predictedTesting <- predict(rfmodel.fit, newdata = testing)
+confusionMatrix(predictedTesting, testing$classe)
+```
+
+The average accuracy is `98.79%`, with **out of sample error** rate of `1.21%`.
+
+## Test Data Predictions
+
+With **out of sample error** rate less than `1.5%`, lets use this model on our test data from `pmltesting`.
+
+```{r}
+predictionOnSampleTest <- predict(rfmodel.fit, newdata = pmltesting)
+write.table(predictionOnSampleTest, file="pmltesting_predictions.txt", quote=F, row.names=F, col.names=F)
+```
+
+The text file, `pmltesting_predictions.txt`, contains the predicted outcomes with respect to each observations in the `pmltesting` csv file. All of the 20 derived predicted outcomes were verified to be correct.
